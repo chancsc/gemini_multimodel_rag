@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -46,6 +46,13 @@ ptb_app.add_handler(CallbackQueryHandler(telegram_handler.handle_callback_query)
 async def lifespan(app: FastAPI):
     await ptb_app.initialize()
     await ptb_app.start()
+
+    await ptb_app.bot.set_my_commands([
+        BotCommand("start",   "Welcome message"),
+        BotCommand("help",    "Usage guide and supported file types"),
+        BotCommand("listdoc", "List all indexed documents"),
+        BotCommand("remove",  "Remove a document — /remove <number>"),
+    ])
 
     if TELEGRAM_WEBHOOK_URL:
         webhook_url = f"{TELEGRAM_WEBHOOK_URL.rstrip('/')}/webhook"

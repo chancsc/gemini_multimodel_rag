@@ -163,6 +163,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not text:
         return
     user_id = str(update.effective_user.id)
+    chat_id = update.effective_chat.id
+
+    # Acknowledge with reaction + typing indicator while query runs
+    await update.message.set_reaction([ReactionTypeEmoji(emoji="🔍")])
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
     try:
         answer = await gemini.query_with_text(text, user_id)
     except Exception as e:
