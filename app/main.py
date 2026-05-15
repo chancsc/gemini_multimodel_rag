@@ -11,6 +11,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -38,6 +39,7 @@ ptb_app.add_handler(
 )
 ptb_app.add_handler(MessageHandler(filters.PHOTO,        telegram_handler.handle_photo))
 ptb_app.add_handler(MessageHandler(filters.Document.ALL, telegram_handler.handle_document))
+ptb_app.add_handler(CallbackQueryHandler(telegram_handler.handle_callback_query))
 
 
 @asynccontextmanager
@@ -49,7 +51,7 @@ async def lifespan(app: FastAPI):
         webhook_url = f"{TELEGRAM_WEBHOOK_URL.rstrip('/')}/webhook"
         await ptb_app.bot.set_webhook(
             url=webhook_url,
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
         )
         print(f"[Startup] Telegram webhook set to {webhook_url}")
     else:

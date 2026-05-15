@@ -130,6 +130,14 @@ def list_documents() -> list[dict]:
     ]
 
 
+def find_document_by_name(display_name: str) -> dict | None:
+    """Return the first document whose display_name matches, or None."""
+    for doc in list_documents():
+        if doc["display_name"] == display_name:
+            return doc
+    return None
+
+
 def delete_document(doc_name: str) -> None:
     """Delete a document from the store by its full resource name."""
     from google.genai import types as _types

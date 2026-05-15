@@ -4,9 +4,10 @@ import traceback
 from io import BytesIO
 import os
 
-from telegram import Update, ReactionTypeEmoji
+from telegram import Update, ReactionTypeEmoji, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
+from app.session import session_store
 import app.gemini_service as gemini
 
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
@@ -31,6 +32,18 @@ def _try_save_to_gcs(data: bytes, path: str, content_type: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+
+def _replace_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Replace",    callback_data="dup=replace"),
+        InlineKeyboardButton("➕ Keep Both",  callback_data="dup=keep"),
+        InlineKeyboardButton("❌ Cancel",     callback_data="dup=cancel"),
+    ]])
+
+
+# ---------------------------------------------------------------------------
 # Background indexing task
 # ---------------------------------------------------------------------------
 
@@ -41,9 +54,15 @@ async def _bg_store_and_notify(
     file_bytes: bytes,
     mime_type: str,
     display_name: str,
+    old_doc_name: str = "",      # if set, delete this before indexing
 ) -> None:
     print(f"[BG Store] Task started: {display_name!r} ({len(file_bytes)} bytes)")
     try:
+        if old_doc_name:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, gemini.delete_document, old_doc_name)
+            print(f"[BG Store] Deleted old doc: {old_doc_name!r}")
+
         await gemini.upload_and_index(file_bytes, mime_type, display_name, user_id)
         print(f"[BG Store] Indexed successfully: {display_name!r}")
         await context.bot.send_message(
@@ -155,10 +174,47 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(answer)
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _receive_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    file_bytes: bytes,
+    mime_type: str,
+    display_name: str,
+    gcs_path: str,
+) -> None:
+    """Shared logic after file bytes are downloaded: duplicate check → index or prompt."""
     user_id = str(update.effective_user.id)
     chat_id = update.effective_chat.id
-    photo = update.message.photo[-1]  # highest resolution
+    loop = asyncio.get_event_loop()
+
+    # Duplicate check
+    existing = await loop.run_in_executor(None, gemini.find_document_by_name, display_name)
+
+    await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+
+    if existing:
+        # Store file in session so the callback handler can retrieve it
+        session_store.set(user_id, "file_bytes",    file_bytes)
+        session_store.set(user_id, "mime_type",     mime_type)
+        session_store.set(user_id, "display_name",  display_name)
+        session_store.set(user_id, "chat_id",       chat_id)
+        session_store.set(user_id, "old_doc_name",  existing["name"])
+        await update.message.reply_text(
+            f"⚠️ *{display_name}* is already in your database.\nWhat would you like to do?",
+            parse_mode="Markdown",
+            reply_markup=_replace_keyboard(),
+        )
+    else:
+        _try_save_to_gcs(file_bytes, gcs_path, mime_type)
+        await update.message.reply_text(f"⏳ Received {display_name} — indexing will start soon.")
+        asyncio.create_task(
+            _bg_store_and_notify(context, chat_id, user_id, file_bytes, mime_type, display_name)
+        )
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+    photo = update.message.photo[-1]
 
     if photo.file_size and photo.file_size > TELEGRAM_MAX_DOWNLOAD_BYTES:
         await update.message.reply_text(
@@ -171,15 +227,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         tg_file = await photo.get_file()
         buf = BytesIO()
         await tg_file.download_to_memory(buf)
-        image_bytes = buf.getvalue()
-
-        display_name = f"photo_{photo.file_id}.jpg"
-        _try_save_to_gcs(image_bytes, f"uploads/{user_id}/{photo.file_id}.jpg", "image/jpeg")
-
-        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
-        await update.message.reply_text("⏳ Received your photo — indexing will start soon.")
-        asyncio.create_task(
-            _bg_store_and_notify(context, chat_id, user_id, image_bytes, "image/jpeg", display_name)
+        await _receive_file(
+            update, context,
+            file_bytes=buf.getvalue(),
+            mime_type="image/jpeg",
+            display_name=f"photo_{photo.file_id}.jpg",
+            gcs_path=f"uploads/{user_id}/{photo.file_id}.jpg",
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Failed to process photo: {str(e)[:120]}")
@@ -187,7 +240,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
-    chat_id = update.effective_chat.id
     doc = update.message.document
 
     filename  = doc.file_name or f"file_{doc.file_id}"
@@ -212,16 +264,54 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         tg_file = await doc.get_file()
         buf = BytesIO()
         await tg_file.download_to_memory(buf)
-        file_bytes = buf.getvalue()
-
-        _try_save_to_gcs(file_bytes, f"uploads/{user_id}/{doc.file_id}.{ext}", mime_type)
-
-        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
-        await update.message.reply_text(f"⏳ Received {filename} — indexing will start soon.")
-        asyncio.create_task(
-            _bg_store_and_notify(context, chat_id, user_id, file_bytes, mime_type, filename)
+        await _receive_file(
+            update, context,
+            file_bytes=buf.getvalue(),
+            mime_type=mime_type,
+            display_name=filename,
+            gcs_path=f"uploads/{user_id}/{doc.file_id}.{ext}",
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Failed to process file: {str(e)[:120]}")
 
 
+# ---------------------------------------------------------------------------
+# Callback query handler (duplicate resolution only)
+# ---------------------------------------------------------------------------
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    user_id = str(update.effective_user.id)
+    action  = query.data
+
+    file_bytes   = session_store.get(user_id, "file_bytes")
+    mime_type    = session_store.get(user_id, "mime_type")
+    display_name = session_store.get(user_id, "display_name")
+    chat_id      = session_store.get(user_id, "chat_id") or update.effective_chat.id
+    old_doc_name = session_store.get(user_id, "old_doc_name") or ""
+
+    if file_bytes is None:
+        await query.edit_message_text("⚠️ Session expired (5 min). Please re-upload the file.")
+        return
+
+    session_store.clear(user_id)
+
+    if action == "dup=cancel":
+        await query.edit_message_text("❌ Upload cancelled.")
+
+    elif action == "dup=keep":
+        await query.edit_message_text(f"⏳ Indexing additional copy of {display_name}...")
+        asyncio.create_task(
+            _bg_store_and_notify(context, chat_id, user_id, file_bytes, mime_type, display_name)
+        )
+
+    elif action == "dup=replace":
+        await query.edit_message_text(f"⏳ Replacing {display_name}...")
+        asyncio.create_task(
+            _bg_store_and_notify(
+                context, chat_id, user_id, file_bytes, mime_type, display_name,
+                old_doc_name=old_doc_name,
+            )
+        )
