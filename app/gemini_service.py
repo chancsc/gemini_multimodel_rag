@@ -234,7 +234,7 @@ async def query_with_text(text: str, user_id: str) -> str:
             ],
         ),
     )
-    return response.text + _extract_sources(response)
+    return (response.text or "") + _extract_sources(response)
 
 
 async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str) -> str:
@@ -273,7 +273,7 @@ async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str) -> 
                 ],
             ),
         )
-        return response.text + _extract_sources(response)
+        return (response.text or "") + _extract_sources(response)
     except Exception:
         # Fallback: describe image first, then text search
         desc_response = await get_client().aio.models.generate_content(
