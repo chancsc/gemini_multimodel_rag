@@ -34,9 +34,13 @@ ISSUES=0
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 _kill_bot() {
-    local pids
-    pids=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' || true)
-    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null && sleep 2 || true
+    local pids attempt
+    for attempt in 1 2 3; do
+        pids=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' || true)
+        [[ -z "$pids" ]] && break
+        kill -9 $pids 2>/dev/null || true
+        sleep 2
+    done
 }
 
 _start_bot() {
