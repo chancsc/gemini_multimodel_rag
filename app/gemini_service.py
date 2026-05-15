@@ -234,7 +234,11 @@ async def query_with_text(text: str, user_id: str) -> str:
             ],
         ),
     )
-    return (response.text or "") + _extract_sources(response)
+    answer = (response.text or "").strip()
+    sources = _extract_sources(response)
+    if not answer and not sources:
+        return "I couldn't find relevant information in your documents for that query."
+    return answer + sources
 
 
 async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str) -> str:
