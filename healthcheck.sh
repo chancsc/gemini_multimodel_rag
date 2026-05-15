@@ -64,7 +64,7 @@ _start_tunnel() {
 
 _register_webhook() {
     local url="$1"
-    curl -sf "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${url}/webhook&allowed_updates=%5B%22message%22%5D" > /dev/null
+    curl -sf "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${url}/webhook&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D" > /dev/null
 }
 
 _update_env() {
@@ -142,14 +142,14 @@ if [[ -n "$BOT_PID" ]]; then
     ok "Running (PID $BOT_PID)"
 else
     fail "Not running"
-    ((ISSUES++))
+    ISSUES=$((ISSUES+1))
     if $FIX_MODE; then
         fixing "Starting bot..."
         _start_bot
         BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1)
         if [[ -n "$BOT_PID" ]]; then
             ok "Started (PID $BOT_PID)"
-            ((ISSUES--))
+            ISSUES=$((ISSUES-1))
         else
             fail "Failed to start — check $BOT_LOG"
         fi
@@ -167,7 +167,7 @@ if [[ -n "$HTTP_RESP" ]]; then
     info "Store: $STORE"
 else
     fail "Not responding on port $BOT_PORT"
-    ((ISSUES++))
+    ISSUES=$((ISSUES+1))
     if $FIX_MODE; then
         fixing "Restarting bot (process exists but HTTP is dead)..."
         _kill_bot
@@ -175,7 +175,7 @@ else
         HTTP_RESP=$(curl -sf --max-time 5 "http://localhost:$BOT_PORT/health" 2>/dev/null || echo "")
         if [[ -n "$HTTP_RESP" ]]; then
             ok "Bot restarted and responding"
-            ((ISSUES--))
+            ISSUES=$((ISSUES-1))
         else
             fail "Still not responding — check $BOT_LOG"
         fi
@@ -194,19 +194,19 @@ if [[ -n "$TUNNEL_PID" ]]; then
         warn "Tunnel URL differs from .env — webhook may be broken"
         info "  .env has:   $TELEGRAM_WEBHOOK_URL"
         info "  Tunnel has: $TUNNEL_URL"
-        ((ISSUES++))
+        ISSUES=$((ISSUES+1))
         if $FIX_MODE; then
             fixing "Updating .env and re-registering webhook..."
             _update_env "TELEGRAM_WEBHOOK_URL" "$TUNNEL_URL"
             TELEGRAM_WEBHOOK_URL="$TUNNEL_URL"
             _register_webhook "$TELEGRAM_WEBHOOK_URL"
             ok ".env updated and webhook re-registered: ${TELEGRAM_WEBHOOK_URL}/webhook"
-            ((ISSUES--))
+            ISSUES=$((ISSUES-1))
         fi
     fi
 else
     fail "Not running"
-    ((ISSUES++))
+    ISSUES=$((ISSUES+1))
     if $FIX_MODE; then
         fixing "Starting cloudflared tunnel..."
         NEW_URL=$(_start_tunnel)
@@ -214,7 +214,7 @@ else
         if [[ -n "$TUNNEL_PID" ]]; then
             ok "Started (PID $TUNNEL_PID)"
             info "URL: $NEW_URL"
-            ((ISSUES--))
+            ISSUES=$((ISSUES-1))
             if [[ -n "$NEW_URL" && "$NEW_URL" != "$TELEGRAM_WEBHOOK_URL" ]]; then
                 fixing "Updating .env with new tunnel URL..."
                 _update_env "TELEGRAM_WEBHOOK_URL" "$NEW_URL"
@@ -236,12 +236,12 @@ if [[ -n "$TELEGRAM_WEBHOOK_URL" ]]; then
         ok "Reachable ($TELEGRAM_WEBHOOK_URL)"
     else
         fail "Cannot reach $TELEGRAM_WEBHOOK_URL/health"
-        ((ISSUES++))
+        ISSUES=$((ISSUES+1))
         warn "Tunnel URL may have changed — run with --restart to reset everything"
     fi
 else
     warn "TELEGRAM_WEBHOOK_URL not set in .env"
-    ((ISSUES++))
+    ISSUES=$((ISSUES+1))
 fi
 echo ""
 
@@ -254,7 +254,7 @@ else
         "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo" 2>/dev/null || echo "")
     if [[ -z "$WH_RESP" ]]; then
         fail "Could not reach Telegram API"
-        ((ISSUES++))
+        ISSUES=$((ISSUES+1))
     else
         WH_URL=$(echo     "$WH_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['url'])" 2>/dev/null || echo "")
         WH_PENDING=$(echo "$WH_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['result'].get('pending_update_count',0))" 2>/dev/null || echo "0")
@@ -264,12 +264,12 @@ else
 
         if [[ -z "$WH_URL" ]]; then
             fail "Webhook not registered (URL is empty)"
-            ((ISSUES++))
+            ISSUES=$((ISSUES+1))
             if $FIX_MODE; then
                 fixing "Registering webhook..."
                 _register_webhook "$TELEGRAM_WEBHOOK_URL"
                 ok "Webhook registered: $EXPECTED_URL"
-                ((ISSUES--))
+                ISSUES=$((ISSUES-1))
             else
                 info "Run with --fix to register automatically"
             fi
@@ -277,12 +277,12 @@ else
             warn "Webhook URL mismatch"
             info "  Registered: $WH_URL"
             info "  Expected:   $EXPECTED_URL"
-            ((ISSUES++))
+            ISSUES=$((ISSUES+1))
             if $FIX_MODE; then
                 fixing "Re-registering webhook..."
                 _register_webhook "$TELEGRAM_WEBHOOK_URL"
                 ok "Webhook updated: $EXPECTED_URL"
-                ((ISSUES--))
+                ISSUES=$((ISSUES-1))
             fi
         else
             ok "Registered: $WH_URL"
