@@ -144,17 +144,14 @@ def _upload_and_index_sync(
         tmp_path = tmp.name
 
     try:
-        metadata: list[dict] = [{"key": "user_id", "string_value": user_id}]
+        config: dict = {"display_name": display_name}
         if extra_metadata:
-            metadata.extend(extra_metadata)
+            config["custom_metadata"] = extra_metadata
 
         operation = client.file_search_stores.upload_to_file_search_store(
             file_search_store_name=store_name,
             file=tmp_path,
-            config={
-                "display_name": display_name,
-                "custom_metadata": metadata,
-            },
+            config=config,
         )
 
         # Poll until done (max 5 minutes)
@@ -192,13 +189,7 @@ async def upload_and_index(
 
 # --- Query ---
 
-def _user_filter(user_id: str) -> str:
-    """Metadata filter expression — restricts results to documents owned by user_id."""
-    return f'user_id="{user_id}"'
-
-
 def _extract_sources(response) -> str:
-    """Extract grounding chunk titles from a GenerateContent response and format as a footer."""
     try:
         chunks = response.candidates[0].grounding_metadata.grounding_chunks
         seen, lines = set(), []
@@ -215,11 +206,9 @@ def _extract_sources(response) -> str:
     return ""
 
 
-async def query_with_text(text: str, user_id: str) -> str:
-    """RAG query using text input, restricted to caller's documents."""
+def _query_text_sync(text: str) -> str:
     store_name = get_or_create_store()
-
-    response = await get_client().aio.models.generate_content(
+    response = get_client().models.generate_content(
         model=GEN_MODEL,
         contents=text,
         config=types.GenerateContentConfig(
@@ -228,7 +217,6 @@ async def query_with_text(text: str, user_id: str) -> str:
                 types.Tool(
                     file_search=types.FileSearch(
                         file_search_store_names=[store_name],
-                        metadata_filter=_user_filter(user_id),
                     )
                 )
             ],
@@ -241,61 +229,29 @@ async def query_with_text(text: str, user_id: str) -> str:
     return answer + sources
 
 
-async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str) -> str:
-    """RAG query using image input, restricted to caller's documents.
-    Primary: pass image directly with file_search tool.
-    Fallback: describe image with vision, then text search.
-    """
-    store_name = get_or_create_store()
-    filter_expr = _user_filter(user_id)
+async def query_with_text(text: str, user_id: str = "") -> str:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _query_text_sync, text)
 
-    try:
-        response = await get_client().aio.models.generate_content(
+
+async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str = "") -> str:
+    """RAG query using an image — describe it, then text-search the store."""
+    loop = asyncio.get_event_loop()
+
+    def _describe_sync():
+        return get_client().models.generate_content(
             model=GEN_MODEL,
             contents=types.Content(
                 parts=[
-                    types.Part(
-                        inline_data=types.Blob(mime_type=mime_type, data=image_bytes)
-                    ),
-                    types.Part(
-                        text=(
-                            "Look at this image and find relevant information in the database. "
-                            "Provide a detailed analysis referencing specific content from the stored documents."
-                        )
-                    ),
-                ]
-            ),
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=[
-                    types.Tool(
-                        file_search=types.FileSearch(
-                            file_search_store_names=[store_name],
-                            metadata_filter=filter_expr,
-                        )
-                    )
-                ],
-            ),
-        )
-        return (response.text or "") + _extract_sources(response)
-    except Exception:
-        # Fallback: describe image first, then text search
-        desc_response = await get_client().aio.models.generate_content(
-            model=GEN_MODEL,
-            contents=types.Content(
-                parts=[
-                    types.Part(
-                        inline_data=types.Blob(mime_type=mime_type, data=image_bytes)
-                    ),
-                    types.Part(
-                        text="Describe all important content in this image in detail, including text, diagrams, objects, and any data."
-                    ),
+                    types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_bytes)),
+                    types.Part(text="Describe all important content in this image in detail, including text, diagrams, objects, and any data."),
                 ]
             ),
             config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
         )
-        description = desc_response.text
-        return await query_with_text(
-            f"Based on this image description, find relevant information in the database:\n\n{description}",
-            user_id,
-        )
+
+    desc_response = await loop.run_in_executor(_executor, _describe_sync)
+    description = desc_response.text or ""
+    return await query_with_text(
+        f"Based on this image description, find relevant information in the database:\n\n{description}",
+    )
