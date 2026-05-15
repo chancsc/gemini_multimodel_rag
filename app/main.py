@@ -29,8 +29,10 @@ ptb_app = (
     .build()
 )
 
-ptb_app.add_handler(CommandHandler("start", telegram_handler.handle_start))
-ptb_app.add_handler(CommandHandler("help",  telegram_handler.handle_help))
+ptb_app.add_handler(CommandHandler("start",   telegram_handler.handle_start))
+ptb_app.add_handler(CommandHandler("help",    telegram_handler.handle_help))
+ptb_app.add_handler(CommandHandler("listdoc", telegram_handler.handle_listdoc))
+ptb_app.add_handler(CommandHandler("remove",  telegram_handler.handle_remove))
 ptb_app.add_handler(
     MessageHandler(filters.TEXT & ~filters.COMMAND, telegram_handler.handle_text)
 )

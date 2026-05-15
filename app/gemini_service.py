@@ -113,6 +113,28 @@ def get_or_create_store() -> str:
     return _store_name
 
 
+# --- Document Management ---
+
+def list_documents() -> list[dict]:
+    """Return all documents in the store as a list of {name, display_name, state} dicts."""
+    client = get_client()
+    store_name = get_or_create_store()
+    docs = client.file_search_stores.documents.list(parent=store_name)
+    return [
+        {
+            "name": d.name,
+            "display_name": getattr(d, "display_name", d.name.split("/")[-1]),
+            "state": str(getattr(d, "state", "")),
+        }
+        for d in docs
+    ]
+
+
+def delete_document(doc_name: str) -> None:
+    """Delete a document from the store by its full resource name."""
+    get_client().file_search_stores.documents.delete(name=doc_name)
+
+
 # --- Upload & Index ---
 
 def _upload_and_index_sync(

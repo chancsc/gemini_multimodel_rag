@@ -62,23 +62,73 @@ async def _bg_store_and_notify(
 # Command handlers
 # ---------------------------------------------------------------------------
 
+async def handle_listdoc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    loop = asyncio.get_event_loop()
+    try:
+        docs = await loop.run_in_executor(None, gemini.list_documents)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to list documents: {str(e)[:120]}")
+        return
+
+    if not docs:
+        await update.message.reply_text("📭 No documents in the database yet.")
+        return
+
+    lines = ["📚 Documents in database:\n"]
+    for i, doc in enumerate(docs, 1):
+        state = "✅" if "ACTIVE" in doc["state"] else "⏳"
+        lines.append(f"{i}. {state} {doc['display_name']}")
+    lines.append("\nUse /remove <number> to delete a document.")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def handle_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Usage: /remove <number>\nGet the number from /listdoc")
+        return
+
+    index = int(args[0]) - 1
+    loop = asyncio.get_event_loop()
+    try:
+        docs = await loop.run_in_executor(None, gemini.list_documents)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to fetch documents: {str(e)[:120]}")
+        return
+
+    if index < 0 or index >= len(docs):
+        await update.message.reply_text(f"⚠️ Invalid number. Use /listdoc to see valid numbers (1–{len(docs)}).")
+        return
+
+    doc = docs[index]
+    try:
+        await loop.run_in_executor(None, gemini.delete_document, doc["name"])
+        await update.message.reply_text(f"🗑️ Deleted: {doc['display_name']}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to delete: {str(e)[:120]}")
+
+
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Welcome to the Multimodal RAG bot!\n\n"
-        "Send me a text message to query your personal knowledge base.\n"
-        "Send a photo or document to save or search it.\n\n"
+        "Send me a text message to query your knowledge base.\n"
+        "Send a photo or document to index it automatically.\n\n"
         "Commands:\n"
-        "/start — Show this message\n"
-        "/help  — Show help"
+        "/start   — Show this message\n"
+        "/help    — Show help\n"
+        "/listdoc — List all indexed documents\n"
+        "/remove <number> — Delete a document"
     )
 
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "📖 How to use:\n"
-        "• Text → RAG query against your stored documents\n"
-        "• Photo → Choose: save to DB or search DB with image\n"
-        "• Document → Choose: save to DB or search DB\n\n"
+        "• Send a document or photo → automatically indexed to your database\n"
+        "• Send a text message → RAG query against all stored documents\n\n"
+        "Commands:\n"
+        "/listdoc — List all indexed documents\n"
+        "/remove <number> — Delete a document by its list number\n\n"
         "Supported file types: PDF, DOCX, XLSX, PPTX, images (JPG/PNG), "
         "TXT, CSV, Markdown, HTML, JSON, YAML, ZIP, and most code files.\n"
         f"File size limit: {TELEGRAM_MAX_DOWNLOAD_BYTES // 1024 // 1024} MB (Telegram bot constraint)."
