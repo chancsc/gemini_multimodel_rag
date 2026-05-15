@@ -4,28 +4,14 @@ import traceback
 from io import BytesIO
 import os
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReactionTypeEmoji
 from telegram.ext import ContextTypes
 
-from app.session import session_store
 import app.gemini_service as gemini
 
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 
 TELEGRAM_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram bot download limit
-
-
-# ---------------------------------------------------------------------------
-# UI helpers
-# ---------------------------------------------------------------------------
-
-def _choice_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📥 Save to Database", callback_data="action=store"),
-            InlineKeyboardButton("🔍 Use as Search",    callback_data="action=search"),
-        ]
-    ])
 
 
 # ---------------------------------------------------------------------------
@@ -133,18 +119,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await tg_file.download_to_memory(buf)
         image_bytes = buf.getvalue()
 
-        # Store bytes in session — GCS is a silent optional backup
-        session_store.set(user_id, "file_bytes",   image_bytes)
-        session_store.set(user_id, "mime_type",    "image/jpeg")
-        session_store.set(user_id, "display_name", f"photo_{photo.file_id}.jpg")
-        session_store.set(user_id, "content_type", "image")
-        session_store.set(user_id, "chat_id",      chat_id)
-
+        display_name = f"photo_{photo.file_id}.jpg"
         _try_save_to_gcs(image_bytes, f"uploads/{user_id}/{photo.file_id}.jpg", "image/jpeg")
 
-        await update.message.reply_text(
-            "🖼️ Photo received! What would you like to do?",
-            reply_markup=_choice_keyboard(),
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+        await update.message.reply_text("⏳ Received your photo — indexing will start soon.")
+        asyncio.create_task(
+            _bg_store_and_notify(context, chat_id, user_id, image_bytes, "image/jpeg", display_name)
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Failed to process photo: {str(e)[:120]}")
@@ -179,72 +160,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await tg_file.download_to_memory(buf)
         file_bytes = buf.getvalue()
 
-        # Store bytes in session — GCS is a silent optional backup
-        session_store.set(user_id, "file_bytes",   file_bytes)
-        session_store.set(user_id, "mime_type",    mime_type)
-        session_store.set(user_id, "display_name", filename)
-        session_store.set(user_id, "content_type", "file")
-        session_store.set(user_id, "chat_id",      chat_id)
-
         _try_save_to_gcs(file_bytes, f"uploads/{user_id}/{doc.file_id}.{ext}", mime_type)
 
-        await update.message.reply_text(
-            f"📄 Received: {filename}\nWhat would you like to do?",
-            reply_markup=_choice_keyboard(),
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+        await update.message.reply_text(f"⏳ Received {filename} — indexing will start soon.")
+        asyncio.create_task(
+            _bg_store_and_notify(context, chat_id, user_id, file_bytes, mime_type, filename)
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Failed to process file: {str(e)[:120]}")
 
 
-# ---------------------------------------------------------------------------
-# Callback query handler
-# ---------------------------------------------------------------------------
-
-async def handle_callback_query(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    user_id      = str(update.effective_user.id)
-    chat_id      = update.effective_chat.id
-    action       = query.data
-
-    file_bytes   = session_store.get(user_id, "file_bytes")
-    mime_type    = session_store.get(user_id, "mime_type")
-    display_name = session_store.get(user_id, "display_name")
-    content_type = session_store.get(user_id, "content_type")
-    stored_chat  = session_store.get(user_id, "chat_id") or chat_id
-
-    if file_bytes is None:
-        await query.edit_message_text(
-            "⚠️ Session expired (5 minutes). Please re-upload your file."
-        )
-        return
-
-    session_store.clear(user_id)
-
-    if action == "action=store":
-        await query.edit_message_text(
-            f"⏳ Indexing in progress...\n📄 {display_name}\n"
-            "I'll message you when it's done."
-        )
-        print(f"[Callback] Scheduling background index for {display_name!r}")
-        asyncio.create_task(
-            _bg_store_and_notify(
-                context, stored_chat, user_id, file_bytes, mime_type, display_name
-            )
-        )
-
-    elif action == "action=search":
-        try:
-            if content_type == "image":
-                answer = await gemini.query_with_image(file_bytes, mime_type, user_id)
-            else:
-                answer = await gemini.query_with_text(
-                    f"Find information in the database related to: {display_name}",
-                    user_id,
-                )
-            await query.edit_message_text(answer)
-        except Exception as e:
-            await query.edit_message_text(f"❌ Search failed: {str(e)[:120]}")
