@@ -18,7 +18,7 @@ STORE_NAME_BLOB = "config/file_search_store_name.txt"
 STORE_NAME_ENV  = os.environ.get("GEMINI_STORE_NAME", "")
 SYSTEM_PROMPT = (
     "You are a helpful assistant. Answer questions based on the documents in the database. "
-    "Always cite specific content from the documents when available. "
+    "Always paraphrase and summarize in your own words — do not copy text verbatim from documents. "
     "If the database does not have enough information, say so clearly and give your best general answer. "
     "Respond in the same language the user writes in."
 )
