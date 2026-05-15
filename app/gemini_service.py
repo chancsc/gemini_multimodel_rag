@@ -132,7 +132,11 @@ def list_documents() -> list[dict]:
 
 def delete_document(doc_name: str) -> None:
     """Delete a document from the store by its full resource name."""
-    get_client().file_search_stores.documents.delete(name=doc_name)
+    from google.genai import types as _types
+    get_client().file_search_stores.documents.delete(
+        name=doc_name,
+        config=_types.DeleteDocumentConfig(force=True),
+    )
 
 
 # --- Upload & Index ---
