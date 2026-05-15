@@ -97,7 +97,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         answer = await gemini.query_with_text(text, user_id)
     except Exception as e:
-        answer = f"❌ Query failed: {str(e)[:120]}"
+        err = str(e)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err:
+            answer = "⚠️ Gemini API quota exceeded for today. Please try again tomorrow or enable billing on your Google AI project."
+        else:
+            answer = f"❌ Query failed: {err[:120]}"
     await update.message.reply_text(answer)
 
 
