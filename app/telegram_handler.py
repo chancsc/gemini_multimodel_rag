@@ -158,6 +158,13 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # Message handlers
 # ---------------------------------------------------------------------------
 
+async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """Send typing action every 4 s until cancelled."""
+    while True:
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        await asyncio.sleep(4)
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     if not text:
@@ -165,10 +172,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = str(update.effective_user.id)
     chat_id = update.effective_chat.id
 
-    # Acknowledge with reaction + typing indicator while query runs
     await update.message.set_reaction([ReactionTypeEmoji(emoji="🔍")])
-    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
+    typing_task = asyncio.create_task(_keep_typing(context, chat_id))
     try:
         answer = await gemini.query_with_text(text, user_id)
     except Exception as e:
@@ -177,6 +183,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             answer = "⚠️ Gemini API quota exceeded for today. Please try again tomorrow or enable billing on your Google AI project."
         else:
             answer = f"❌ Query failed: {err[:120]}"
+    finally:
+        typing_task.cancel()
+
     await update.message.reply_text(answer)
 
 
