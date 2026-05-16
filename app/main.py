@@ -56,11 +56,20 @@ async def lifespan(app: FastAPI):
 
     if TELEGRAM_WEBHOOK_URL:
         webhook_url = f"{TELEGRAM_WEBHOOK_URL.rstrip('/')}/webhook"
-        await ptb_app.bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=["message", "callback_query"],
-        )
-        print(f"[Startup] Telegram webhook set to {webhook_url}")
+        for attempt in range(1, 4):
+            try:
+                await ptb_app.bot.set_webhook(
+                    url=webhook_url,
+                    allowed_updates=["message", "callback_query"],
+                )
+                print(f"[Startup] Telegram webhook set to {webhook_url}")
+                break
+            except Exception as e:
+                print(f"[Startup] Webhook attempt {attempt}/3 failed: {e}")
+                if attempt < 3:
+                    await asyncio.sleep(3)
+                else:
+                    print("[Startup] Warning: could not register webhook — run healthcheck.sh --fix")
     else:
         print("[Startup] TELEGRAM_WEBHOOK_URL not set — webhook not registered")
 

@@ -165,6 +165,9 @@ async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None
         await asyncio.sleep(4)
 
 
+QUERY_TIMEOUT_SECONDS = 60
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     if not text:
@@ -172,11 +175,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = str(update.effective_user.id)
     chat_id = update.effective_chat.id
 
-    await update.message.set_reaction([ReactionTypeEmoji(emoji="🔍")])
+    try:
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+    except Exception:
+        pass  # reactions are best-effort
 
     typing_task = asyncio.create_task(_keep_typing(context, chat_id))
     try:
-        answer = await gemini.query_with_text(text, user_id)
+        answer = await asyncio.wait_for(
+            gemini.query_with_text(text, user_id),
+            timeout=QUERY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        answer = f"⏱️ Query timed out after {QUERY_TIMEOUT_SECONDS}s. Please try a shorter question or try again later."
     except Exception as e:
         err = str(e)
         if "429" in err or "RESOURCE_EXHAUSTED" in err:
