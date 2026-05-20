@@ -12,7 +12,38 @@ from google.cloud import storage as gcs
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
-GEN_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+
+# Model rotation — File-Search-capable models in priority order.
+# Override the list via GEMINI_ROTATION_MODELS="a,b,c" in .env.
+# The primary model (GEMINI_MODEL) is always inserted at position 0.
+_PRIMARY_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+_DEFAULT_ROTATION = "gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash-lite"
+ROTATION_MODELS: list[str] = [
+    m.strip()
+    for m in os.environ.get("GEMINI_ROTATION_MODELS", _DEFAULT_ROTATION).split(",")
+    if m.strip()
+]
+if _PRIMARY_MODEL in ROTATION_MODELS:
+    ROTATION_MODELS.remove(_PRIMARY_MODEL)
+ROTATION_MODELS.insert(0, _PRIMARY_MODEL)
+
+# model -> unix timestamp after which it is no longer considered exhausted
+_exhausted_until: dict[str, float] = {}
+
+
+def _get_active_model() -> str:
+    """Return the first non-exhausted model; fall back to soonest-to-reset if all are exhausted."""
+    now = time.time()
+    for model in ROTATION_MODELS:
+        if _exhausted_until.get(model, 0) <= now:
+            return model
+    return min(ROTATION_MODELS, key=lambda m: _exhausted_until[m])
+
+
+def _mark_exhausted(model: str) -> None:
+    _exhausted_until[model] = time.time() + 86400  # 24 h
+    nxt = _get_active_model()
+    print(f"[Model] {model} daily quota exhausted → switching to {nxt}")
 
 STORE_NAME_BLOB = "config/file_search_store_name.txt"
 STORE_NAME_ENV  = os.environ.get("GEMINI_STORE_NAME", "")
@@ -242,25 +273,40 @@ def _extract_sources(response) -> str:
 
 def _query_text_sync(text: str) -> str:
     store_name = get_or_create_store()
-    response = get_client().models.generate_content(
-        model=GEN_MODEL,
-        contents=text,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[
-                types.Tool(
-                    file_search=types.FileSearch(
-                        file_search_store_names=[store_name],
-                    )
-                )
-            ],
-        ),
-    )
-    answer = (response.text or "").strip()
-    sources = _extract_sources(response)
-    if not answer and not sources:
-        return "I couldn't find relevant information in your documents for that query."
-    return answer + sources
+    tried: set[str] = set()
+    while True:
+        model = _get_active_model()
+        if model in tried:
+            raise RuntimeError(
+                "429 RESOURCE_EXHAUSTED: all models have exhausted their daily quota"
+            )
+        tried.add(model)
+        try:
+            response = get_client().models.generate_content(
+                model=model,
+                contents=text,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=[
+                        types.Tool(
+                            file_search=types.FileSearch(
+                                file_search_store_names=[store_name],
+                            )
+                        )
+                    ],
+                ),
+            )
+            answer = (response.text or "").strip()
+            sources = _extract_sources(response)
+            if not answer and not sources:
+                return "I couldn't find relevant information in your documents for that query."
+            return answer + sources
+        except Exception as e:
+            err = str(e)
+            if ("429" in err or "RESOURCE_EXHAUSTED" in err) and "PerDay" in err:
+                _mark_exhausted(model)
+                continue
+            raise
 
 
 async def query_with_text(text: str, user_id: str = "") -> str:
@@ -274,7 +320,7 @@ async def query_with_image(image_bytes: bytes, mime_type: str, user_id: str = ""
 
     def _describe_sync():
         return get_client().models.generate_content(
-            model=GEN_MODEL,
+            model=_get_active_model(),
             contents=types.Content(
                 parts=[
                     types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_bytes)),

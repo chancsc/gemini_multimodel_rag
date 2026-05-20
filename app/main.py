@@ -92,7 +92,14 @@ fastapi_app = FastAPI(title="Telegram Bot Multimodal RAG", lifespan=lifespan)
 
 @fastapi_app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "store": gemini._store_name or "not initialized"}
+    exhausted = {m: t for m, t in gemini._exhausted_until.items()}
+    return {
+        "status": "ok",
+        "model": gemini._get_active_model(),
+        "rotation": gemini.ROTATION_MODELS,
+        "exhausted": {m: f"resets in {int(t - __import__('time').time())}s" for m, t in exhausted.items()},
+        "store": gemini._store_name or "not initialized",
+    }
 
 
 @fastapi_app.get("/store/info")
