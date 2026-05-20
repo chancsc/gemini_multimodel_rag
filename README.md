@@ -1,4 +1,4 @@
-# Telegram Multimodal RAG Bot
+# Gemini Multimodal RAG Bot (via Telegram)
 
 A Telegram bot that lets you build a personal knowledge base from documents and images, then query it using natural language. Powered by **Google Gemini File Search Store** for retrieval-augmented generation (RAG).
 
