@@ -64,7 +64,7 @@ _start_tunnel() {
 
 _register_webhook() {
     local url="$1"
-    curl -sf "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${url}/webhook&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D" > /dev/null
+    curl -sf "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${url}/webhook&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D" > /dev/null || true
 }
 
 _update_env() {
@@ -86,7 +86,7 @@ if [[ "$MODE" == "--restart" ]]; then
 
     fixing "Starting bot..."
     _start_bot
-    BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1)
+    BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1 || true)
     [[ -n "$BOT_PID" ]] && ok "Bot started (PID $BOT_PID)" || { fail "Bot failed to start — check $BOT_LOG"; exit 1; }
 
     fixing "Stopping tunnel..."
@@ -95,7 +95,7 @@ if [[ "$MODE" == "--restart" ]]; then
 
     fixing "Starting tunnel..."
     NEW_URL=$(_start_tunnel)
-    TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1)
+    TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1 || true)
     if [[ -n "$TUNNEL_PID" && -n "$NEW_URL" ]]; then
         ok "Tunnel started (PID $TUNNEL_PID)"
         info "URL: $NEW_URL"
@@ -137,7 +137,7 @@ echo ""
 
 # ── 1. Bot process ────────────────────────────────────────────────────────────
 echo "▶ Bot process"
-BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1)
+BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1 || true)
 if [[ -n "$BOT_PID" ]]; then
     ok "Running (PID $BOT_PID)"
 else
@@ -146,7 +146,7 @@ else
     if $FIX_MODE; then
         fixing "Starting bot..."
         _start_bot
-        BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1)
+        BOT_PID=$(ps aux | grep "uvicorn app.main" | grep -v grep | awk '{print $2}' | head -1 || true)
         if [[ -n "$BOT_PID" ]]; then
             ok "Started (PID $BOT_PID)"
             ISSUES=$((ISSUES-1))
@@ -185,7 +185,7 @@ echo ""
 
 # ── 3. Cloudflared tunnel process ─────────────────────────────────────────────
 echo "▶ Cloudflared tunnel"
-TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1)
+TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1 || true)
 if [[ -n "$TUNNEL_PID" ]]; then
     ok "Running (PID $TUNNEL_PID)"
     TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1 || echo "")
@@ -210,7 +210,7 @@ else
     if $FIX_MODE; then
         fixing "Starting cloudflared tunnel..."
         NEW_URL=$(_start_tunnel)
-        TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1)
+        TUNNEL_PID=$(ps aux | grep "cloudflared tunnel" | grep "$BOT_PORT" | grep -v grep | awk '{print $2}' | head -1 || true)
         if [[ -n "$TUNNEL_PID" ]]; then
             ok "Started (PID $TUNNEL_PID)"
             info "URL: $NEW_URL"
@@ -296,14 +296,25 @@ echo ""
 
 # ── 6. Gemini store ────────────────────────────────────────────────────────────
 echo "▶ Gemini File Search Store"
-STORE_RESP=$(curl -sf --max-time 10 "http://localhost:$BOT_PORT/store/info" 2>/dev/null || echo "")
-if [[ -n "$STORE_RESP" ]]; then
+rm -f /tmp/_store_body.json
+STORE_HTTP_CODE=$(curl -s -o /tmp/_store_body.json -w "%{http_code}" --max-time 20 "http://localhost:$BOT_PORT/store/info" 2>/dev/null || true)
+STORE_HTTP_CODE="${STORE_HTTP_CODE:-000}"
+STORE_RESP=$(cat /tmp/_store_body.json 2>/dev/null || echo "")
+if [[ "$STORE_HTTP_CODE" == "200" && -n "$STORE_RESP" ]]; then
     DOC_COUNT=$(echo "$STORE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('document_count',0))" 2>/dev/null || echo "?")
     STORE_NAME=$(echo "$STORE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('store_name','?'))" 2>/dev/null || echo "?")
     ok "$DOC_COUNT document(s) indexed"
     info "Store: $STORE_NAME"
+elif [[ "$STORE_HTTP_CODE" == "504" ]]; then
+    warn "Gemini API timed out querying store info"
+    ISSUES=$((ISSUES+1))
+elif [[ "$STORE_HTTP_CODE" == "000" ]]; then
+    warn "Could not reach bot on port $BOT_PORT (not running?)"
+    ISSUES=$((ISSUES+1))
 else
-    warn "Could not query store info (bot may not be running)"
+    DETAIL=$(echo "$STORE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('detail',''))" 2>/dev/null || echo "")
+    warn "Store info failed (HTTP $STORE_HTTP_CODE${DETAIL:+: $DETAIL})"
+    ISSUES=$((ISSUES+1))
 fi
 echo ""
 

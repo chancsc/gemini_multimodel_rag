@@ -99,16 +99,20 @@ async def health() -> dict:
 async def store_info() -> dict:
     loop = asyncio.get_event_loop()
     try:
-        store_name = await loop.run_in_executor(None, gemini.get_or_create_store)
-        client = gemini.get_client()
-        store = await loop.run_in_executor(
-            None, lambda: client.file_search_stores.get(name=store_name)
+        store_name = await asyncio.wait_for(
+            loop.run_in_executor(None, gemini.get_or_create_store), timeout=10.0
         )
-        documents = await loop.run_in_executor(
-            None,
-            lambda: list(
-                client.file_search_stores.documents.list(parent=store_name)
+        client = gemini.get_client()
+        store = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: client.file_search_stores.get(name=store_name)),
+            timeout=10.0,
+        )
+        documents = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: list(client.file_search_stores.documents.list(parent=store_name)),
             ),
+            timeout=15.0,
         )
         return {
             "store_name": store_name,
@@ -123,6 +127,8 @@ async def store_info() -> dict:
                 for d in documents
             ],
         }
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Gemini API timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -131,5 +137,5 @@ async def store_info() -> dict:
 async def webhook(request: Request) -> dict:
     data = await request.json()
     update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
+    asyncio.create_task(ptb_app.process_update(update))
     return {"ok": True}

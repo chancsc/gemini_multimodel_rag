@@ -165,7 +165,7 @@ async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None
         await asyncio.sleep(4)
 
 
-QUERY_TIMEOUT_SECONDS = 60
+QUERY_TIMEOUT_SECONDS = 120
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
