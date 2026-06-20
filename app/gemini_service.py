@@ -17,7 +17,7 @@ GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 # Override the list via GEMINI_ROTATION_MODELS="a,b,c" in .env.
 # The primary model (GEMINI_MODEL) is always inserted at position 0.
 _PRIMARY_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-_DEFAULT_ROTATION = "gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash-lite"
+_DEFAULT_ROTATION = "gemini-3.5-flash,gemini-3-flash-preview"
 ROTATION_MODELS: list[str] = [
     m.strip()
     for m in os.environ.get("GEMINI_ROTATION_MODELS", _DEFAULT_ROTATION).split(",")
@@ -82,10 +82,21 @@ _MIME_TO_EXT = {
 }
 
 
+# Bounds each individual HTTP call to the Gemini API. Without this, a slow/hung
+# request can run past the asyncio-level QUERY_TIMEOUT_SECONDS wrapper in
+# telegram_handler.py — the user sees a timeout, but the thread in _executor
+# keeps running underneath, permanently eating one of the few worker threads
+# and making subsequent queries time out more easily.
+GEMINI_HTTP_TIMEOUT_MS = int(os.environ.get("GEMINI_HTTP_TIMEOUT_MS", "300000"))
+
+
 def get_client() -> genai.Client:
     global _client
     if _client is None:
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        _client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
+        )
     return _client
 
 

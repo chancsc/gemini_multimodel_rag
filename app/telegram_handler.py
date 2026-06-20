@@ -159,13 +159,13 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ---------------------------------------------------------------------------
 
 async def _keep_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    """Send typing action every 4 s until cancelled."""
+    """Refresh typing indicator every 4 s until cancelled."""
     while True:
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         await asyncio.sleep(4)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
 
-QUERY_TIMEOUT_SECONDS = 120
+QUERY_TIMEOUT_SECONDS = 280
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -180,16 +180,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception:
         pass  # reactions are best-effort
 
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     typing_task = asyncio.create_task(_keep_typing(context, chat_id))
+    start = asyncio.get_event_loop().time()
+    active_threads = gemini._executor._work_queue.qsize()
+    print(f"[Query] Start | user={user_id} model={gemini._get_active_model()} "
+          f"queued_ahead={active_threads} text={text[:80]!r}")
     try:
         answer = await asyncio.wait_for(
             gemini.query_with_text(text, user_id),
             timeout=QUERY_TIMEOUT_SECONDS,
         )
+        print(f"[Query] Done in {asyncio.get_event_loop().time() - start:.1f}s | user={user_id}")
     except asyncio.TimeoutError:
+        elapsed = asyncio.get_event_loop().time() - start
+        print(f"[Query] Timeout after {elapsed:.1f}s | user={user_id} model={gemini._get_active_model()} "
+              f"text={text[:80]!r}")
         answer = f"⏱️ Query timed out after {QUERY_TIMEOUT_SECONDS}s. Please try a shorter question or try again later."
     except Exception as e:
+        elapsed = asyncio.get_event_loop().time() - start
         err = str(e)
+        print(f"[Query] Error after {elapsed:.1f}s | user={user_id} model={gemini._get_active_model()} "
+              f"err={err[:200]!r}")
         if "429" in err or "RESOURCE_EXHAUSTED" in err:
             answer = "⚠️ Gemini API quota exceeded for today. Please try again tomorrow or enable billing on your Google AI project."
         else:
@@ -213,10 +225,12 @@ async def _receive_file(
     chat_id = update.effective_chat.id
     loop = asyncio.get_event_loop()
 
-    # Duplicate check
-    existing = await loop.run_in_executor(None, gemini.find_document_by_name, display_name)
-
-    await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+    # Duplicate check (may be slow — keep typing indicator going)
+    typing_task = asyncio.create_task(_keep_typing(context, chat_id))
+    try:
+        existing = await loop.run_in_executor(None, gemini.find_document_by_name, display_name)
+    finally:
+        typing_task.cancel()
 
     if existing:
         # Store file in session so the callback handler can retrieve it
@@ -240,7 +254,14 @@ async def _receive_file(
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
+    chat_id = update.effective_chat.id
     photo = update.message.photo[-1]
+
+    try:
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+    except Exception:
+        pass
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     if photo.file_size and photo.file_size > TELEGRAM_MAX_DOWNLOAD_BYTES:
         await update.message.reply_text(
@@ -266,7 +287,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
+    chat_id = update.effective_chat.id
     doc = update.message.document
+
+    try:
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="👀")])
+    except Exception:
+        pass
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     filename  = doc.file_name or f"file_{doc.file_id}"
     mime_type = doc.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"

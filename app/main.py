@@ -107,19 +107,19 @@ async def store_info() -> dict:
     loop = asyncio.get_event_loop()
     try:
         store_name = await asyncio.wait_for(
-            loop.run_in_executor(None, gemini.get_or_create_store), timeout=10.0
+            loop.run_in_executor(None, gemini.get_or_create_store), timeout=20.0
         )
         client = gemini.get_client()
         store = await asyncio.wait_for(
             loop.run_in_executor(None, lambda: client.file_search_stores.get(name=store_name)),
-            timeout=10.0,
+            timeout=20.0,
         )
         documents = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
                 lambda: list(client.file_search_stores.documents.list(parent=store_name)),
             ),
-            timeout=15.0,
+            timeout=45.0,
         )
         return {
             "store_name": store_name,

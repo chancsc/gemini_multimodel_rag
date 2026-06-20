@@ -297,7 +297,7 @@ echo ""
 # ── 6. Gemini store ────────────────────────────────────────────────────────────
 echo "▶ Gemini File Search Store"
 rm -f /tmp/_store_body.json
-STORE_HTTP_CODE=$(curl -s -o /tmp/_store_body.json -w "%{http_code}" --max-time 20 "http://localhost:$BOT_PORT/store/info" 2>/dev/null || true)
+STORE_HTTP_CODE=$(curl -s -o /tmp/_store_body.json -w "%{http_code}" --max-time 90 "http://localhost:$BOT_PORT/store/info" 2>/dev/null || true)
 STORE_HTTP_CODE="${STORE_HTTP_CODE:-000}"
 STORE_RESP=$(cat /tmp/_store_body.json 2>/dev/null || echo "")
 if [[ "$STORE_HTTP_CODE" == "200" && -n "$STORE_RESP" ]]; then
